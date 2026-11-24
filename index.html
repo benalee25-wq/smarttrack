@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SmartTrack</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.58.0/dist/umd/supabase.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
 <style>
 :root{--ink:#14213d;--mut:#5c677d;--line:#dde3ec;--bg:#f4f7fb;--pri:#0a6e6e;--pri2:#085757;--warn:#b42318;--card:#fff}
 *{box-sizing:border-box}
@@ -44,6 +46,10 @@ ul.list li{display:flex;justify-content:space-between;align-items:center;backgro
  nav.open{transform:none}
 }
 @media(prefers-reduced-motion:reduce){nav{transition:none}}
+.overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);overflow:auto;padding:1rem;z-index:20}
+.mp{background:#fff;border-radius:10px;padding:1rem;max-width:520px;margin:0 auto}
+button.del.ok{color:var(--pri)}
+@media print{body>section,body>script{display:none!important}.overlay{position:static!important;background:none!important}.noprint{display:none!important}}
 </style>
 </head>
 <body>
@@ -80,6 +86,7 @@ ul.list li{display:flex;justify-content:space-between;align-items:center;backgro
  </div>
 </section>
 
+<div id="modal" class="overlay hide"></div>
 <script>
 const SB_URL='https://abnfuzrfmsrzmfnnqdfw.supabase.co', SB_KEY='sb_publishable_h8pmqoi-VMOWDJwoZPaVIA_KOAlXSlG'; // anon key only. Never the service role key.
 const sb=supabase.createClient(SB_URL,SB_KEY);
@@ -125,9 +132,8 @@ async function boot(){
 }
 async function logout(){await sb.auth.signOut();ORG=null;showAuth()}
 
-const NAV=[['dash','Dashboard'],['departments','Departments'],['branches','Branches'],['settings','Organization settings'],
- ['x1','Staff','Phase 2'],['x2','QR codes','Phase 2'],['x3','Attendance records','Phase 2'],['x4','Work schedules','Phase 2'],
- ['x5','Leave','Phase 2'],['x6','Reports','Phase 4'],['x7','Notifications','Phase 4']];
+const NAV=[['dash','Dashboard'],['scan','Scan attendance'],['staff','Staff & QR codes'],['attendance','Attendance records'],['schedules','Work schedules'],['departments','Departments'],['branches','Branches'],['settings','Organization settings'],
+ ['x5','Leave','Later'],['x6','Reports','Phase 4'],['x7','Notifications','Phase 4']];
 function buildNav(){
  $('#topName').textContent=ORG.name;
  $('#nav').innerHTML=`<div class="brand">${ORG.logo_url?`<img src="${esc(ORG.logo_url)}" alt="">`:''}<span>${esc(ORG.name)}</span></div>`+
@@ -137,9 +143,9 @@ function buildNav(){
  $('#lo').onclick=logout;$('#burger').onclick=()=>$('#nav').classList.toggle('open');
 }
 function go(v){
- $('#nav').classList.remove('open');
+ $('#nav').classList.remove('open');if(scanner){scanner.stop().catch(()=>{});scanner=null}
  $('#nav').querySelectorAll('[data-v]').forEach(a=>a.classList.toggle('on',a.dataset.v===v));
- ({dash:dashView,departments:()=>listView('departments','Departments'),branches:()=>listView('branches','Branches'),settings:settingsView})[v]();
+ ({dash:dashView,departments:()=>listView('departments','Departments'),branches:()=>listView('branches','Branches'),settings:settingsView,staff:staffView,schedules:scheduleView,attendance:attView,scan:scanView})[v]();
 }
 
 async function dashView(){
@@ -195,8 +201,105 @@ function settingsView(){
   if(error)return $('#sm').innerHTML=`<div class="msg err">${esc(error.message)}</div>`;
   ORG=data;buildNav();$('#sm').innerHTML='<div class="msg">Changes saved.</div>'};
 }
+/* ---------- Phase 2 ---------- */
+let SCH=[],DEP=[],BR=[],STAFF=[],scanner=null,lastTok='',lastAt=0;
+const fmt=t=>t?new Date(t).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}):'—';
+const opts=(L,v)=>'<option value="">—</option>'+L.map(x=>`<option value="${esc(x.id)}"${x.id===v?' selected':''}>${esc(x.name)}</option>`).join('');
+const err=e=>`<div class="msg err">${esc(e.code==='23505'?'That value already exists.':e.message)}</div>`;
+async function lookups(){const q=t=>sb.from(t).select('id,name').eq('organization_id',ORG.id).order('name');
+ const r=await Promise.all([q('departments'),q('branches'),q('work_schedules')]);DEP=r[0].data||[];BR=r[1].data||[];SCH=r[2].data||[]}
+function modal(h){const m=$('#modal');m.innerHTML=`<div class="mp">${h}<button class="ghost noprint" id="mc" style="margin-top:.5rem">Close</button></div>`;m.classList.remove('hide');$('#mc').onclick=()=>m.classList.add('hide')}
+
+async function staffView(){
+ await lookups();
+ const {data,error}=await sb.from('staff').select('*,departments(name)').eq('organization_id',ORG.id).order('full_name');
+ if(error)return $('#main').innerHTML=err(error);STAFF=data;
+ $('#main').innerHTML=`<h2>Staff & QR codes</h2>
+ <div class="row" style="flex-wrap:wrap;margin-bottom:.75rem"><button id="ad">Add staff</button><button class="ghost" id="tp">CSV template</button><button class="ghost" id="ib">Import CSV</button><input id="im" type="file" accept=".csv" hidden></div>
+ <input id="sq" placeholder="Search name or staff ID" aria-label="Search"><div id="sm2"></div>
+ <ul class="list" id="sl">${data.map(s=>`<li data-k="${esc((s.full_name+' '+s.staff_code).toLowerCase())}"><span><b>${esc(s.full_name)}</b><br><small>${esc(s.staff_code)} · ${esc(s.departments?.name||'No department')} · ${esc(s.employment_status)}</small></span><span><button class="del ok" data-a="qr" data-id="${s.id}">QR</button><button class="del ok" data-a="ed" data-id="${s.id}">Edit</button><button class="del" data-a="tg" data-id="${s.id}">${s.employment_status==='active'?'Deactivate':'Reactivate'}</button></span></li>`).join('')||'<p class="empty">No staff yet. Add one or import a CSV.</p>'}</ul>`;
+ $('#sq').oninput=e=>document.querySelectorAll('#sl li').forEach(li=>li.classList.toggle('hide',!li.dataset.k.includes(e.target.value.toLowerCase())));
+ $('#ad').onclick=()=>staffForm(null);$('#tp').onclick=tpl;$('#ib').onclick=()=>$('#im').click();$('#im').onchange=e=>importCSV(e.target.files[0]);
+ $('#sl').onclick=async e=>{const b=e.target.closest('button');if(!b)return;const s=STAFF.find(x=>x.id===b.dataset.id);
+  if(b.dataset.a==='qr')qrModal(s);else if(b.dataset.a==='ed')staffForm(s);
+  else{const to=s.employment_status==='active'?'inactive':'active';
+   if(!confirm(`${to==='inactive'?'Deactivate':'Reactivate'} ${s.full_name}?`))return;
+   const r=await sb.from('staff').update({employment_status:to}).eq('id',s.id).eq('organization_id',ORG.id);
+   if(r.error)return $('#sm2').innerHTML=err(r.error);staffView()}};
+}
+function staffForm(s){
+ const x=s||{};const i=(id,l,v,t='text',req='')=>`<label>${l}<input id="${id}" type="${t}" value="${esc(v)}" ${req}></label>`;
+ modal(`<h3>${s?'Edit':'Add'} staff</h3><form id="ff">${i('fCode','Staff ID',x.staff_code,'text','required maxlength=40')}${i('fName','Full name',x.full_name,'text','required maxlength=120')}${i('fEm','Email',x.email,'email')}${i('fTel','Phone',x.phone,'tel')}
+ <label>Gender (optional)<select id="fGe"><option value="">—</option><option ${x.gender==='Male'?'selected':''}>Male</option><option ${x.gender==='Female'?'selected':''}>Female</option></select></label>
+ <label>Department<select id="fDp">${opts(DEP,x.department_id)}</select></label><label>Branch<select id="fBr">${opts(BR,x.branch_id)}</select></label>
+ ${i('fDs','Job designation',x.designation)}<label>Work schedule<select id="fSc">${opts(SCH,x.schedule_id)}</select></label>${i('fDt','Date of employment',x.employed_on,'date')}
+ <label>Photograph<input id="fPic" type="file" accept="image/png,image/jpeg,image/webp"></label><button>Save</button></form><div id="fm"></div>`);
+ $('#ff').onsubmit=async e=>{e.preventDefault();let photo=x.photo_url||null;const f=$('#fPic').files[0];
+  if(f){if(f.size>1048576)return $('#fm').innerHTML='<div class="msg err">Photo must be under 1 MB.</div>';
+   const p=`${ORG.id}/${Date.now()}.${f.type.split('/')[1]}`;const up=await sb.storage.from('staff-photos').upload(p,f,{contentType:f.type});
+   if(up.error)return $('#fm').innerHTML=err(up.error);photo=sb.storage.from('staff-photos').getPublicUrl(p).data.publicUrl}
+  const v=id=>$(id).value.trim()||null;
+  const row={staff_code:$('#fCode').value.trim(),full_name:$('#fName').value.trim(),email:v('#fEm'),phone:v('#fTel'),gender:v('#fGe'),department_id:v('#fDp'),branch_id:v('#fBr'),designation:v('#fDs'),schedule_id:v('#fSc'),employed_on:v('#fDt'),photo_url:photo};
+  const r=s?await sb.from('staff').update(row).eq('id',s.id).eq('organization_id',ORG.id):await sb.from('staff').insert({...row,organization_id:ORG.id});
+  if(r.error)return $('#fm').innerHTML=err(r.error);$('#modal').classList.add('hide');staffView()};
+}
+async function qrModal(s){
+ const {data}=await sb.from('staff_qr_tokens').select('token').eq('staff_id',s.id).eq('active',true).maybeSingle();
+ modal(`<div id="card" style="text-align:center"><b>${esc(ORG.name)}</b><br>${s.photo_url?`<img src="${esc(s.photo_url)}" alt="" style="width:90px;height:90px;object-fit:cover;border-radius:8px;margin:.5rem">`:''}<h3>${esc(s.full_name)}</h3><div>${esc(s.staff_code)}${s.designation?' · '+esc(s.designation):''}</div><div id="qr" style="display:inline-block;margin:.75rem;padding:8px;background:#fff"></div></div>
+ <div class="row noprint" style="flex-wrap:wrap"><button id="dl">Download QR</button><button id="pr">Print ID card</button><button class="ghost" id="rt">Replace QR</button></div>`);
+ if(data?.token)new QRCode($('#qr'),{text:data.token,width:200,height:200,correctLevel:QRCode.CorrectLevel.M});else $('#qr').textContent='No active QR code. Tap Replace QR.';
+ $('#dl').onclick=()=>{const c=$('#qr canvas');if(!c)return;const a=document.createElement('a');a.href=c.toDataURL('image/png');a.download=`qr-${s.staff_code}.png`;a.click()};
+ $('#pr').onclick=()=>window.print();
+ $('#rt').onclick=async()=>{if(!confirm('Replace this QR? The old one stops working immediately.'))return;
+  const r=await sb.rpc('rotate_staff_qr',{p_staff:s.id});if(r.error)return alert(r.error.message);qrModal(s)};
+}
+const HDR='staff_code,full_name,email,phone,gender,designation,department,branch,date_employed';
+function tpl(){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([HDR+'\nEMP001,Ada Obi,ada@example.com,08012345678,Female,Accountant,Finance,Main Office,2025-01-15\n'],{type:'text/csv'}));a.download='staff_template.csv';a.click()}
+function parseCSV(t){const rows=[];let r=[],c='',q=false;for(let i=0;i<t.length;i++){const ch=t[i];
+ if(q){if(ch=='"'){if(t[i+1]=='"'){c+='"';i++}else q=false}else c+=ch}
+ else if(ch=='"')q=true;else if(ch==','){r.push(c);c=''}else if(ch=='\n'){r.push(c);rows.push(r);r=[];c=''}else if(ch!='\r')c+=ch}
+ if(c||r.length){r.push(c);rows.push(r)}return rows.filter(x=>x.some(v=>v.trim()))}
+async function importCSV(f){if(!f)return;const rows=parseCSV(await f.text());const h=rows.shift().map(x=>x.trim().toLowerCase());
+ if(!h.includes('staff_code')||!h.includes('full_name'))return $('#sm2').innerHTML='<div class="msg err">CSV needs staff_code and full_name columns. Use the template.</div>';
+ const g=(r,k)=>(r[h.indexOf(k)]||'').trim()||null,idOf=(L,n)=>n?(L.find(x=>x.name.toLowerCase()===n.toLowerCase())||{}).id||null:null;
+ const out=[];let skip=0;rows.forEach(r=>{const code=g(r,'staff_code'),nm=g(r,'full_name');if(!code||!nm){skip++;return}
+  const d=g(r,'date_employed');out.push({organization_id:ORG.id,staff_code:code,full_name:nm,email:g(r,'email'),phone:g(r,'phone'),gender:g(r,'gender'),designation:g(r,'designation'),department_id:idOf(DEP,g(r,'department')),branch_id:idOf(BR,g(r,'branch')),employed_on:/^\d{4}-\d\d-\d\d$/.test(d||'')?d:null})});
+ let ok=0;for(let i=0;i<out.length;i+=100){const r=await sb.from('staff').insert(out.slice(i,i+100));
+  if(r.error)return $('#sm2').innerHTML=err(r.error).replace('</div>',` Imported ${ok} before the error. Nothing in the failed batch of 100 was saved.</div>`);ok+=Math.min(100,out.length-i)}
+ $('#sm2').innerHTML=`<div class="msg">Imported ${ok} staff. Skipped ${skip} rows with no ID or name. Unmatched departments or branches were left blank.</div>`;setTimeout(staffView,1500)}
+
+async function scheduleView(){
+ const {data,error}=await sb.from('work_schedules').select('*').eq('organization_id',ORG.id).order('name');
+ if(error)return $('#main').innerHTML=err(error);
+ $('#main').innerHTML=`<h2>Work schedules</h2><p style="color:var(--mut)">Staff arriving after start time plus grace minutes are marked late.</p>
+ <form id="wf" class="panel"><label>Name<input id="wN" required maxlength="60" placeholder="Regular hours"></label><label>Start<input id="wS" type="time" required value="08:00"></label><label>End<input id="wE" type="time" required value="17:00"></label><label>Grace minutes<input id="wG" type="number" min="0" max="120" value="15" required></label><button>Add schedule</button></form><div id="wm"></div>
+ <ul class="list">${data.map(w=>`<li><span>${esc(w.name)}<br><small>${esc(w.start_time.slice(0,5))}–${esc(w.end_time.slice(0,5))}, grace ${w.grace_minutes} min</small></span><button class="del" data-id="${w.id}">Delete</button></li>`).join('')||'<p class="empty">No schedules yet.</p>'}</ul>`;
+ $('#wf').onsubmit=async e=>{e.preventDefault();const r=await sb.from('work_schedules').insert({organization_id:ORG.id,name:$('#wN').value.trim(),start_time:$('#wS').value,end_time:$('#wE').value,grace_minutes:+$('#wG').value});
+  if(r.error)return $('#wm').innerHTML=err(r.error);scheduleView()};
+ $('#main').querySelectorAll('.del').forEach(b=>b.onclick=async()=>{if(!confirm('Delete schedule?'))return;
+  const r=await sb.from('work_schedules').delete().eq('id',b.dataset.id).eq('organization_id',ORG.id);if(r.error)return $('#wm').innerHTML=err(r.error);scheduleView()});
+}
+async function attView(){
+ const d0=new Date(Date.now()-new Date().getTimezoneOffset()*6e4).toISOString().slice(0,10);
+ $('#main').innerHTML=`<h2>Attendance records</h2><label>Date<input id="ad2" type="date" value="${d0}"></label><div id="al"></div>`;
+ const load=async()=>{const {data,error}=await sb.from('attendance_records').select('check_in_at,check_out_at,status,staff(full_name,staff_code)').eq('organization_id',ORG.id).eq('attendance_date',$('#ad2').value).order('check_in_at');
+  $('#al').innerHTML=error?err(error):`<ul class="list">${data.map(a=>`<li><span><b>${esc(a.staff?.full_name)}</b> <small>${esc(a.staff?.staff_code)}</small><br><small>In ${fmt(a.check_in_at)} · Out ${fmt(a.check_out_at)}</small></span><span>${esc((a.status||'').replace('_',' '))}</span></li>`).join('')||'<p class="empty">No attendance recorded for this date.</p>'}</ul>`};
+ $('#ad2').onchange=load;load();
+}
+function scanView(){
+ $('#main').innerHTML=`<h2>Scan attendance</h2><p style="color:var(--mut)">First scan of the day clocks in; a later scan clocks out.</p><div id="rd" style="max-width:360px"></div><div class="row" style="margin:.75rem 0"><button id="st">Start camera</button></div>
+ <form id="mf" class="row"><input id="mt" placeholder="Or paste QR code text" aria-label="QR text"><button class="ghost">Check</button></form><div id="res"></div>`;
+ $('#st').onclick=()=>{if(scanner)return;scanner=new Html5Qrcode('rd');scanner.start({facingMode:'environment'},{fps:10,qrbox:240},handleScan).catch(e=>{scanner=null;$('#res').innerHTML=err({message:'Camera not available: '+e})})};
+ $('#mf').onsubmit=e=>{e.preventDefault();handleScan($('#mt').value,true)};
+}
+async function handleScan(tok,force){if(!force&&tok===lastTok&&Date.now()-lastAt<4000)return;lastTok=tok;lastAt=Date.now();
+ const {data,error}=await sb.rpc('scan_staff',{p_token:tok});if(error)return $('#res').innerHTML=err(error);
+ const M={CHECKED_IN:['Checked in','#e3f6ec'],CHECKED_OUT:['Checked out','#e3f6ec'],ALREADY_CHECKED_IN:['Already checked in','#fff4d6'],ALREADY_COMPLETE:['Already clocked in and out today','#fff4d6'],INVALID:['Invalid or unknown QR code','#fde8e6'],INACTIVE:['Staff account is inactive','#fde8e6']}[data.result]||[data.result,'#fde8e6'];
+ $('#res').innerHTML=`<div class="panel" style="background:${M[1]}"><h3>${M[0]}</h3>${data.name?`<div style="display:flex;gap:.75rem">${data.photo?`<img src="${esc(data.photo)}" alt="" style="width:72px;height:72px;object-fit:cover;border-radius:8px">`:''}<div><b>${esc(data.name)}</b><br>${esc(data.code||'')} · ${esc(data.dept||'No department')} · ${esc(data.branch||'No branch')}<br>Status: ${esc((data.status||'').replace('_',' '))}<br>In ${fmt(data['in'])} · Out ${fmt(data.out)}</div></div>`:''}</div>`}
+
 sb.auth.onAuthStateChange(ev=>{if(ev==='SIGNED_OUT')showAuth()});
 boot();
 </script>
 </body>
 </html>
+
