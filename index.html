@@ -56,7 +56,7 @@ button.del.ok{color:var(--pri)}
 <section id="auth" class="auth hide">
  <h1>SmartTrack</h1>
  <p style="color:var(--mut)">QR attendance and event management for your organization.</p>
- <div class="tabs"><button id="tLogin">Log in</button><button id="tReg" class="ghost">Register organization</button></div>
+ <div class="tabs"><button id="tLogin">Log in</button><button id="tReg" class="ghost">New organization</button><button id="tJoin" class="ghost">Join with code</button></div>
  <div class="panel">
   <form id="fLogin">
    <label>Email<input id="lEmail" type="email" required autocomplete="email"></label>
@@ -73,6 +73,13 @@ button.del.ok{color:var(--pri)}
    <label>Administrator name<input id="rAdmin" required></label>
    <label>Administrator password (8+ characters)<input id="rPass" type="password" required minlength="8" autocomplete="new-password"></label>
    <button>Register organization</button>
+  </form>
+  <form id="fJoin" class="hide">
+   <label>Your name<input id="jName" required maxlength="120"></label>
+   <label>Email<input id="jEmail" type="email" required autocomplete="email"></label>
+   <label>Password (8+ characters)<input id="jPass" type="password" required minlength="8" autocomplete="new-password"></label>
+   <label>Invite code<input id="jCode" required maxlength="20" autocapitalize="characters"></label>
+   <button>Join</button>
   </form>
   <div id="authMsg"></div>
  </div>
@@ -119,6 +126,8 @@ async function boot(){
  let {data:m,error}=await sb.from('organization_members').select('role,organizations(*)').eq('user_id',session.user.id).eq('active',true).limit(1);
  if(error){showAuth();return authMsg(error.message,1)}
  if(!m.length){
+  const pi=session.user.user_metadata?.pending_invite;
+  if(pi){const c=await sb.rpc('claim_invite',{p_code:pi.code,p_name:pi.name});if(c.error){await sb.auth.signOut();showAuth();return authMsg(c.error.message,1)}return boot()}
   const p=session.user.user_metadata?.pending_org;
   if(!p){await sb.auth.signOut();showAuth();return authMsg('This account is not linked to an organization yet. Register one first.',1)}
   const r=await sb.rpc('register_organization',{p_name:p.name,p_type:p.type,p_email:p.email,p_phone:p.phone,p_address:p.address,p_admin_name:p.admin});
@@ -127,7 +136,7 @@ async function boot(){
  }
  ORG=m[0].organizations;ROLE=m[0].role;
  $('#auth').classList.add('hide');$('#app').classList.remove('hide');
- if(ROLE!=='org_admin'){$('#nav').innerHTML='';$('#main').innerHTML=`<h2>Welcome</h2><p>The staff and officer screens arrive in Phase 2.</p><button id="so">Log out</button>`;$('#so').onclick=logout;return}
+ if(ROLE!=='org_admin'){buildOther();return}
  buildNav();go('dash');
 }
 async function logout(){await sb.auth.signOut();ORG=null;showAuth()}
@@ -137,7 +146,7 @@ const NAV=[['dash','Dashboard'],['scan','Scan attendance'],['staff','Staff & QR 
 function buildNav(){
  $('#topName').textContent=ORG.name;
  $('#nav').innerHTML=`<div class="brand">${ORG.logo_url?`<img src="${esc(ORG.logo_url)}" alt="">`:''}<span>${esc(ORG.name)}</span></div>`+
-  NAV.map(([k,l,s])=>s?`<a class="off" aria-disabled="true">${l}<small>${s}</small></a>`:`<a data-v="${k}" tabindex="0">${l}</a>`).join('')+
+  (window.NAV2||NAV).map(([k,l,s])=>s?`<a class="off" aria-disabled="true">${l}<small>${s}</small></a>`:`<a data-v="${k}" tabindex="0">${l}</a>`).join('')+
   `<a id="lo" style="margin-top:auto" tabindex="0">Log out</a>`;
  $('#nav').querySelectorAll('[data-v]').forEach(a=>{a.onclick=()=>go(a.dataset.v);a.onkeydown=e=>{if(e.key==='Enter')go(a.dataset.v)}});
  $('#lo').onclick=logout;$('#burger').onclick=()=>$('#nav').classList.toggle('open');
@@ -145,7 +154,7 @@ function buildNav(){
 function go(v){
  $('#nav').classList.remove('open');if(scanner){scanner.stop().catch(()=>{});scanner=null}
  $('#nav').querySelectorAll('[data-v]').forEach(a=>a.classList.toggle('on',a.dataset.v===v));
- ({dash:dashView,departments:()=>listView('departments','Departments'),branches:()=>listView('branches','Branches'),settings:settingsView,staff:staffView,schedules:scheduleView,attendance:attView,scan:scanView})[v]();
+ ({dash:dashView,departments:()=>listView('departments','Departments'),branches:()=>listView('branches','Branches'),settings:settingsView,staff:staffView,schedules:scheduleView,attendance:attView,scan:scanView,me:meView})[v]();
 }
 
 async function dashView(){
@@ -215,13 +224,13 @@ async function staffView(){
  const {data,error}=await sb.from('staff').select('*,departments(name)').eq('organization_id',ORG.id).order('full_name');
  if(error)return $('#main').innerHTML=err(error);STAFF=data;
  $('#main').innerHTML=`<h2>Staff & QR codes</h2>
- <div class="row" style="flex-wrap:wrap;margin-bottom:.75rem"><button id="ad">Add staff</button><button class="ghost" id="tp">CSV template</button><button class="ghost" id="ib">Import CSV</button><input id="im" type="file" accept=".csv" hidden></div>
+ <div class="row" style="flex-wrap:wrap;margin-bottom:.75rem"><button id="ad">Add staff</button><button class="ghost" id="io">Invite officer</button><button class="ghost" id="tp">CSV template</button><button class="ghost" id="ib">Import CSV</button><input id="im" type="file" accept=".csv" hidden></div>
  <input id="sq" placeholder="Search name or staff ID" aria-label="Search"><div id="sm2"></div>
- <ul class="list" id="sl">${data.map(s=>`<li data-k="${esc((s.full_name+' '+s.staff_code).toLowerCase())}"><span><b>${esc(s.full_name)}</b><br><small>${esc(s.staff_code)} · ${esc(s.departments?.name||'No department')} · ${esc(s.employment_status)}</small></span><span><button class="del ok" data-a="qr" data-id="${s.id}">QR</button><button class="del ok" data-a="ed" data-id="${s.id}">Edit</button><button class="del" data-a="tg" data-id="${s.id}">${s.employment_status==='active'?'Deactivate':'Reactivate'}</button></span></li>`).join('')||'<p class="empty">No staff yet. Add one or import a CSV.</p>'}</ul>`;
+ <ul class="list" id="sl">${data.map(s=>`<li data-k="${esc((s.full_name+' '+s.staff_code).toLowerCase())}"><span><b>${esc(s.full_name)}</b><br><small>${esc(s.staff_code)} · ${esc(s.departments?.name||'No department')} · ${esc(s.employment_status)}</small></span><span><button class="del ok" data-a="qr" data-id="${s.id}">QR</button>${s.user_id?'':`<button class="del ok" data-a="iv" data-id="${s.id}">Invite</button>`}<button class="del ok" data-a="ed" data-id="${s.id}">Edit</button><button class="del" data-a="tg" data-id="${s.id}">${s.employment_status==='active'?'Deactivate':'Reactivate'}</button></span></li>`).join('')||'<p class="empty">No staff yet. Add one or import a CSV.</p>'}</ul>`;
  $('#sq').oninput=e=>document.querySelectorAll('#sl li').forEach(li=>li.classList.toggle('hide',!li.dataset.k.includes(e.target.value.toLowerCase())));
- $('#ad').onclick=()=>staffForm(null);$('#tp').onclick=tpl;$('#ib').onclick=()=>$('#im').click();$('#im').onchange=e=>importCSV(e.target.files[0]);
+ $('#ad').onclick=()=>staffForm(null);$('#io').onclick=()=>inviteModal(null);$('#tp').onclick=tpl;$('#ib').onclick=()=>$('#im').click();$('#im').onchange=e=>importCSV(e.target.files[0]);
  $('#sl').onclick=async e=>{const b=e.target.closest('button');if(!b)return;const s=STAFF.find(x=>x.id===b.dataset.id);
-  if(b.dataset.a==='qr')qrModal(s);else if(b.dataset.a==='ed')staffForm(s);
+  if(b.dataset.a==='qr')qrModal(s);else if(b.dataset.a==='ed')staffForm(s);else if(b.dataset.a==='iv')inviteModal(s);
   else{const to=s.employment_status==='active'?'inactive':'active';
    if(!confirm(`${to==='inactive'?'Deactivate':'Reactivate'} ${s.full_name}?`))return;
    const r=await sb.from('staff').update({employment_status:to}).eq('id',s.id).eq('organization_id',ORG.id);
@@ -297,9 +306,41 @@ async function handleScan(tok,force){if(!force&&tok===lastTok&&Date.now()-lastAt
  const M={CHECKED_IN:['Checked in','#e3f6ec'],CHECKED_OUT:['Checked out','#e3f6ec'],ALREADY_CHECKED_IN:['Already checked in','#fff4d6'],ALREADY_COMPLETE:['Already clocked in and out today','#fff4d6'],INVALID:['Invalid or unknown QR code','#fde8e6'],INACTIVE:['Staff account is inactive','#fde8e6']}[data.result]||[data.result,'#fde8e6'];
  $('#res').innerHTML=`<div class="panel" style="background:${M[1]}"><h3>${M[0]}</h3>${data.name?`<div style="display:flex;gap:.75rem">${data.photo?`<img src="${esc(data.photo)}" alt="" style="width:72px;height:72px;object-fit:cover;border-radius:8px">`:''}<div><b>${esc(data.name)}</b><br>${esc(data.code||'')} · ${esc(data.dept||'No department')} · ${esc(data.branch||'No branch')}<br>Status: ${esc((data.status||'').replace('_',' '))}<br>In ${fmt(data['in'])} · Out ${fmt(data.out)}</div></div>`:''}</div>`}
 
+/* ---------- Phase 2b: officer and staff logins ---------- */
+function tab(m){m=m===true?'reg':m===false?'login':m;
+ $('#fLogin').classList.toggle('hide',m!=='login');$('#fReg').classList.toggle('hide',m!=='reg');$('#fJoin').classList.toggle('hide',m!=='join');
+ $('#tLogin').className=m==='login'?'':'ghost';$('#tReg').className=m==='reg'?'':'ghost';$('#tJoin').className=m==='join'?'':'ghost';authMsg('')}
+$('#tJoin').onclick=()=>tab('join');
+$('#fJoin').onsubmit=async e=>{e.preventDefault();authMsg('');
+ const pi={code:$('#jCode').value.trim().toUpperCase(),name:$('#jName').value.trim()};
+ const {data,error}=await sb.auth.signUp({email:$('#jEmail').value.trim(),password:$('#jPass').value,options:{data:{full_name:pi.name,pending_invite:pi}}});
+ if(error)return authMsg(error.message,1);
+ if(data.session)boot();else{authMsg('Check your email to confirm, then log in. Your invite is applied at first login.');tab('login')}};
+function buildOther(){window.NAV2=ROLE==='staff'?[['me','My attendance']]:[['scan','Scan attendance'],['attendance','Attendance records']];buildNav();go(ROLE==='staff'?'me':'scan')}
+async function inviteModal(s){
+ const r=await sb.rpc('create_invite',{p_org:ORG.id,p_role:s?'staff':'attendance_officer',p_staff:s?s.id:null});
+ if(r.error)return alert(r.error.message);
+ modal(`<h3>Invite ${s?esc(s.full_name):'attendance officer'}</h3><p>Give them this code. It works once and expires in 7 days.</p><p style="font-size:1.8rem;font-weight:700;letter-spacing:.1em">${esc(r.data)}</p><p>They open <b>${esc(location.origin+location.pathname)}</b>, tap <b>Join with code</b>, and enter their name, email, a password and this code.</p>`)}
+async function meView(){
+ const uid=(await sb.auth.getUser()).data.user.id;
+ const {data:s}=await sb.from('staff').select('*,departments(name),branches(name)').eq('user_id',uid).maybeSingle();
+ if(!s)return $('#main').innerHTML='<h2>My attendance</h2><p class="empty">Your account is not linked to a staff record.</p>';
+ const [t,a]=await Promise.all([sb.from('staff_qr_tokens').select('token').eq('staff_id',s.id).eq('active',true).maybeSingle(),
+  sb.from('attendance_records').select('attendance_date,check_in_at,check_out_at,status').eq('staff_id',s.id).order('attendance_date',{ascending:false}).limit(62)]);
+ const A=a.data||[],today=new Date(Date.now()-new Date().getTimezoneOffset()*6e4).toISOString().slice(0,10);
+ const td=A.find(x=>x.attendance_date===today),mo=A.filter(x=>x.attendance_date.startsWith(today.slice(0,7)));
+ $('#main').innerHTML=`<h2>My attendance</h2><div class="panel" style="text-align:center"><b>${esc(s.full_name)}</b><br><small>${esc(s.staff_code)} · ${esc(s.departments?.name||'')} ${esc(s.branches?.name?'· '+s.branches.name:'')}</small><br>
+ <div id="myqr" style="display:inline-block;margin:.75rem;padding:8px;background:#fff"></div><br><button id="mq">Download my QR</button></div>
+ <div class="stats">${[[td?fmt(td.check_in_at):'—','Clock-in today'],[td?fmt(td.check_out_at):'—','Clock-out today'],[mo.length,'Days present this month'],[mo.filter(x=>x.status==='late').length,'Late arrivals this month']].map(([n,l])=>`<div class="stat"><b>${n}</b><span>${l}</span></div>`).join('')}</div>
+ <button class="ghost" id="mcsv">Download my attendance (CSV)</button>
+ <ul class="list">${A.map(x=>`<li><span>${esc(x.attendance_date)}<br><small>In ${fmt(x.check_in_at)} · Out ${fmt(x.check_out_at)}</small></span><span>${esc((x.status||'').replace('_',' '))}</span></li>`).join('')||'<p class="empty">No attendance yet.</p>'}</ul>`;
+ if(t.data?.token)new QRCode($('#myqr'),{text:t.data.token,width:200,height:200,correctLevel:QRCode.CorrectLevel.M});else $('#myqr').textContent='No active QR. Ask your administrator.';
+ $('#mq').onclick=()=>{const c=$('#myqr canvas');if(!c)return;const l=document.createElement('a');l.href=c.toDataURL('image/png');l.download='my-qr.png';l.click()};
+ $('#mcsv').onclick=()=>{const l=document.createElement('a');l.href=URL.createObjectURL(new Blob(['date,check_in,check_out,status\n'+A.map(x=>[x.attendance_date,x.check_in_at||'',x.check_out_at||'',x.status||''].join(',')).join('\n')],{type:'text/csv'}));l.download='my-attendance.csv';l.click()};
+}
+
 sb.auth.onAuthStateChange(ev=>{if(ev==='SIGNED_OUT')showAuth()});
 boot();
 </script>
 </body>
 </html>
-
