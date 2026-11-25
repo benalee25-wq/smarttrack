@@ -142,7 +142,7 @@ async function boot(){
 async function logout(){await sb.auth.signOut();ORG=null;showAuth()}
 
 const NAV=[['dash','Dashboard'],['scan','Scan attendance'],['staff','Staff & QR codes'],['attendance','Attendance records'],['schedules','Work schedules'],['departments','Departments'],['branches','Branches'],['settings','Organization settings'],
- ['x5','Leave','Later'],['x6','Reports','Phase 4'],['x7','Notifications','Phase 4']];
+ ['requests','Leave & corrections'],['x6','Reports','Phase 4'],['x7','Notifications','Phase 4']];
 function buildNav(){
  $('#topName').textContent=ORG.name;
  $('#nav').innerHTML=`<div class="brand">${ORG.logo_url?`<img src="${esc(ORG.logo_url)}" alt="">`:''}<span>${esc(ORG.name)}</span></div>`+
@@ -154,7 +154,7 @@ function buildNav(){
 function go(v){
  $('#nav').classList.remove('open');if(scanner){scanner.stop().catch(()=>{});scanner=null}
  $('#nav').querySelectorAll('[data-v]').forEach(a=>a.classList.toggle('on',a.dataset.v===v));
- ({dash:dashView,departments:()=>listView('departments','Departments'),branches:()=>listView('branches','Branches'),settings:settingsView,staff:staffView,schedules:scheduleView,attendance:attView,scan:scanView,me:meView})[v]();
+ ({dash:dashView,departments:()=>listView('departments','Departments'),branches:()=>listView('branches','Branches'),settings:settingsView,staff:staffView,schedules:scheduleView,attendance:attView,scan:scanView,me:meView,requests:reqView,myreq:myReqView})[v]();
 }
 
 async function dashView(){
@@ -168,7 +168,7 @@ async function dashView(){
  const bars=data.trend.map((t,i)=>{const h=Math.round(H*t.n/max);
   return `<rect x="${i*bw+6}" y="${H-h}" width="${bw-12}" height="${h}" fill="#0a6e6e"><title>${esc(t.d)}: ${t.n}</title></rect><text x="${i*bw+bw/2}" y="${H+14}" font-size="10" text-anchor="middle" fill="#5c677d">${esc(t.d.slice(5))}</text>`}).join('');
  $('#main').innerHTML=`<h2>Dashboard</h2>
- <div class="stats">${card(data.total_staff,'Registered staff')}${card(data.present,'Present today')}${card(absent,'Not yet in')}${card(data.late,'Arrived late')}${card(data.no_clockout,'Not clocked out')}${card(pct+'%','Attendance today')}</div>
+ <div class="stats">${card(data.total_staff,'Registered staff')}${card(data.present,'Present today')}${card(absent,'Not yet in')}${card(data.late,'Arrived late')}${card(data.no_clockout,'Not clocked out')}${card(data.on_leave,'On approved leave')}${card(pct+'%','Attendance today')}</div>
  <div class="panel"><h3>Check-ins, last 7 days</h3><svg viewBox="0 0 ${W} ${H+20}" width="100%" role="img" aria-label="Daily check-ins for the last 7 days">${bars}</svg></div>
  <p class="empty">Approved leave and weekly/monthly statistics are added with staff and leave management in Phase 2.</p>`;
 }
@@ -291,8 +291,8 @@ async function scheduleView(){
 async function attView(){
  const d0=new Date(Date.now()-new Date().getTimezoneOffset()*6e4).toISOString().slice(0,10);
  $('#main').innerHTML=`<h2>Attendance records</h2><label>Date<input id="ad2" type="date" value="${d0}"></label><div id="al"></div>`;
- const load=async()=>{const {data,error}=await sb.from('attendance_records').select('check_in_at,check_out_at,status,staff(full_name,staff_code)').eq('organization_id',ORG.id).eq('attendance_date',$('#ad2').value).order('check_in_at');
-  $('#al').innerHTML=error?err(error):`<ul class="list">${data.map(a=>`<li><span><b>${esc(a.staff?.full_name)}</b> <small>${esc(a.staff?.staff_code)}</small><br><small>In ${fmt(a.check_in_at)} · Out ${fmt(a.check_out_at)}</small></span><span>${esc((a.status||'').replace('_',' '))}</span></li>`).join('')||'<p class="empty">No attendance recorded for this date.</p>'}</ul>`};
+ const load=async()=>{const {data,error}=await sb.from('attendance_records').select('check_in_at,check_out_at,status,departure_status,overtime_minutes,staff(full_name,staff_code)').eq('organization_id',ORG.id).eq('attendance_date',$('#ad2').value).order('check_in_at');
+  $('#al').innerHTML=error?err(error):`<ul class="list">${data.map(a=>`<li><span><b>${esc(a.staff?.full_name)}</b> <small>${esc(a.staff?.staff_code)}</small><br><small>In ${fmt(a.check_in_at)} · Out ${fmt(a.check_out_at)}${a.departure_status==='early'?' (left early)':''}${a.overtime_minutes?' · overtime '+a.overtime_minutes+' min':''}</small></span><span>${esc((a.status||'').replace('_',' '))}</span></li>`).join('')||'<p class="empty">No attendance recorded for this date.</p>'}</ul>`};
  $('#ad2').onchange=load;load();
 }
 function scanView(){
@@ -316,7 +316,7 @@ $('#fJoin').onsubmit=async e=>{e.preventDefault();authMsg('');
  const {data,error}=await sb.auth.signUp({email:$('#jEmail').value.trim(),password:$('#jPass').value,options:{data:{full_name:pi.name,pending_invite:pi}}});
  if(error)return authMsg(error.message,1);
  if(data.session)boot();else{authMsg('Check your email to confirm, then log in. Your invite is applied at first login.');tab('login')}};
-function buildOther(){window.NAV2=ROLE==='staff'?[['me','My attendance']]:[['scan','Scan attendance'],['attendance','Attendance records']];buildNav();go(ROLE==='staff'?'me':'scan')}
+function buildOther(){window.NAV2=ROLE==='staff'?[['me','My attendance'],['myreq','Leave & corrections']]:[['scan','Scan attendance'],['attendance','Attendance records']];buildNav();go(ROLE==='staff'?'me':'scan')}
 async function inviteModal(s){
  const r=await sb.rpc('create_invite',{p_org:ORG.id,p_role:s?'staff':'attendance_officer',p_staff:s?s.id:null});
  if(r.error)return alert(r.error.message);
@@ -337,6 +337,32 @@ async function meView(){
  if(t.data?.token)new QRCode($('#myqr'),{text:t.data.token,width:200,height:200,correctLevel:QRCode.CorrectLevel.M});else $('#myqr').textContent='No active QR. Ask your administrator.';
  $('#mq').onclick=()=>{const c=$('#myqr canvas');if(!c)return;const l=document.createElement('a');l.href=c.toDataURL('image/png');l.download='my-qr.png';l.click()};
  $('#mcsv').onclick=()=>{const l=document.createElement('a');l.href=URL.createObjectURL(new Blob(['date,check_in,check_out,status\n'+A.map(x=>[x.attendance_date,x.check_in_at||'',x.check_out_at||'',x.status||''].join(',')).join('\n')],{type:'text/csv'}));l.download='my-attendance.csv';l.click()};
+}
+
+/* ---------- Phase 2c: leave and corrections ---------- */
+const LT={annual:'Annual',sick:'Sick',casual:'Casual',maternity_paternity:'Maternity/Paternity',other:'Other'};
+const stBadge=s=>`<span style="font-weight:600;color:${s==='approved'?'#0a6e3e':s==='rejected'?'#b42318':'#8a5a00'}">${esc(s)}</span>`;
+const dec=(x,k,admin)=>x.status==='pending'&&admin?`<span><button class="del ok" data-k="${k}" data-ok="1" data-id="${x.id}">Approve</button><button class="del" data-k="${k}" data-ok="0" data-id="${x.id}">Reject</button></span>`:stBadge(x.status);
+const lrow=(x,admin)=>`<li><span>${admin?`<b>${esc(x.staff?.full_name)}</b> <small>${esc(x.staff?.staff_code)}</small><br>`:''}<small>${esc(LT[x.leave_type])} · ${esc(x.start_date)} to ${esc(x.end_date)}${x.reason?' · '+esc(x.reason):''}${x.decision_note?' · Note: '+esc(x.decision_note):''}</small></span>${dec(x,'leave',admin)}</li>`;
+const crow=(x,admin)=>`<li><span>${admin?`<b>${esc(x.staff?.full_name)}</b> <small>${esc(x.staff?.staff_code)}</small><br>`:''}<small>${esc(x.attendance_date)} · In ${fmt(x.requested_in)} · Out ${fmt(x.requested_out)} · ${esc(x.reason)}${x.decision_note?' · Note: '+esc(x.decision_note):''}</small></span>${dec(x,'corr',admin)}</li>`;
+async function loadReqs(admin){const sel=t=>{let q=sb.from(t).select(admin?'*,staff(full_name,staff_code)':'*').order('created_at',{ascending:false}).limit(50);return admin?q.eq('organization_id',ORG.id):q};
+ const [l,c]=await Promise.all([sel('leave_requests'),sel('attendance_corrections')]);return [l.data||[],c.data||[],l.error||c.error]}
+async function reqView(){
+ const [L,C,e]=await loadReqs(true);if(e)return $('#main').innerHTML=err(e);
+ $('#main').innerHTML=`<h2>Leave & corrections</h2><div id="rm"></div><h3>Leave requests</h3><ul class="list">${L.map(x=>lrow(x,1)).join('')||'<p class="empty">None.</p>'}</ul><h3>Attendance corrections</h3><ul class="list">${C.map(x=>crow(x,1)).join('')||'<p class="empty">None.</p>'}</ul>`;
+ $('#main').onclick=async ev=>{const b=ev.target.closest('button[data-k]');if(!b)return;const ok=b.dataset.ok==='1';const note=prompt(`${ok?'Approve':'Reject'} this request. Note (optional):`);if(note===null)return;
+  const r=await sb.rpc(b.dataset.k==='leave'?'decide_leave':'decide_correction',{p_id:b.dataset.id,p_approve:ok,p_note:note});
+  if(r.error)return $('#rm').innerHTML=err(r.error);reqView()};
+}
+async function myReqView(){
+ const [L,C,e]=await loadReqs(false);if(e)return $('#main').innerHTML=err(e);
+ $('#main').innerHTML=`<h2>Leave & corrections</h2><div id="rm"></div>
+ <form id="lf" class="panel"><h3>Apply for leave</h3><label>Type<select id="lt">${Object.entries(LT).map(([k,v])=>`<option value="${k}">${v}</option>`).join('')}</select></label><label>From<input id="ls" type="date" required></label><label>To<input id="le" type="date" required></label><label>Reason<input id="lr" maxlength="500"></label><button>Submit leave request</button></form>
+ <h3>My leave requests</h3><ul class="list">${L.map(x=>lrow(x,0)).join('')||'<p class="empty">None yet.</p>'}</ul>
+ <form id="cf" class="panel"><h3>Request an attendance correction</h3><label>Date<input id="cd" type="date" required></label><label>Correct clock-in time<input id="ci" type="time"></label><label>Correct clock-out time<input id="co" type="time"></label><label>Reason<input id="cr" required minlength="3" maxlength="500"></label><button>Submit correction</button></form>
+ <h3>My corrections</h3><ul class="list">${C.map(x=>crow(x,0)).join('')||'<p class="empty">None yet.</p>'}</ul>`;
+ $('#lf').onsubmit=async e=>{e.preventDefault();const r=await sb.rpc('apply_leave',{p_type:$('#lt').value,p_start:$('#ls').value,p_end:$('#le').value,p_reason:$('#lr').value});if(r.error)return $('#rm').innerHTML=err(r.error);myReqView()};
+ $('#cf').onsubmit=async e=>{e.preventDefault();const r=await sb.rpc('request_correction',{p_date:$('#cd').value,p_in:$('#ci').value||null,p_out:$('#co').value||null,p_reason:$('#cr').value});if(r.error)return $('#rm').innerHTML=err(r.error);myReqView()};
 }
 
 sb.auth.onAuthStateChange(ev=>{if(ev==='SIGNED_OUT')showAuth()});
