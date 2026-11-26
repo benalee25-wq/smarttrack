@@ -8,7 +8,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
 <style>
-:root{--ink:#14213d;--mut:#5c677d;--line:#dde3ec;--bg:#f4f7fb;--pri:#0a6e6e;--pri2:#085757;--warn:#b42318;--card:#fff}
+:root{--ink:#14213d;--mut:#5c677d;--line:#dde3ec;--bg:#f4f7fb;--pri:#0f6b4b;--pri2:#0b5239;--warn:#b42318;--card:#fff}
 *{box-sizing:border-box}
 body{margin:0;font:16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:var(--ink);background:var(--bg)}
 h1,h2,h3{margin:0 0 .5rem}
@@ -32,7 +32,7 @@ nav a{color:#cfd8e6;padding:.55rem .7rem;border-radius:6px;cursor:pointer;displa
 nav a.on,nav a:hover{background:#22345c;color:#fff}
 nav a.off{opacity:.5;cursor:default}nav a small{font-size:.7rem}
 main{padding:1.25rem;min-width:0}
-.top{display:none;background:var(--ink);color:#fff;padding:.6rem 1rem;align-items:center;justify-content:space-between}
+.top{display:none;background:var(--pri);color:#fff;padding:.6rem 1rem;align-items:center;justify-content:space-between}
 .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.75rem;margin:1rem 0}
 .stat{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:.9rem}
 .stat b{font-size:1.9rem;display:block}.stat span{color:var(--mut);font-size:.9rem}
@@ -50,6 +50,14 @@ ul.list li{display:flex;justify-content:space-between;align-items:center;backgro
 .mp{background:#fff;border-radius:10px;padding:1rem;max-width:520px;margin:0 auto}
 button.del.ok{color:var(--pri)}
 @media print{body>section,body>script{display:none!important}.overlay{position:static!important;background:none!important}.noprint{display:none!important}}
+.top button{background:transparent;border:2px solid #fff;color:#fff;padding:.45rem .8rem;margin-left:.4rem}
+nav{background:#0b3d2e}nav a.on,nav a:hover{background:#14634a}
+.panel{border-radius:16px}button{border-radius:12px}
+.mbtn{flex:1;height:72px;font-size:1.25rem;font-weight:700;letter-spacing:.02em;opacity:.55}.mbtn.on{opacity:1;box-shadow:0 0 0 3px #f5a524}
+.cam{position:relative;background:#13273d;border:12px solid #9fb0aa;border-radius:26px;min-height:300px;overflow:hidden;display:flex;align-items:center;justify-content:center;color:#fff;margin:.75rem 0}
+.cam #rd{width:100%}
+.big{width:100%;height:56px;font-size:1.15rem;font-weight:700;border-radius:12px;line-height:1.2}
+.hint{text-align:center;font-weight:700;font-size:1.25rem;margin:.75rem 0}
 </style>
 </head>
 <body>
@@ -72,6 +80,7 @@ button.del.ok{color:var(--pri)}
    <label>Office address<input id="rAddr"></label>
    <label>Administrator name<input id="rAdmin" required></label>
    <label>Administrator password (8+ characters)<input id="rPass" type="password" required minlength="8" autocomplete="new-password"></label>
+   <fieldset style="border:1px solid var(--line);border-radius:8px;margin:0 0 .75rem"><legend>What will you use SmartTrack for?</legend><label><input id="mS" type="checkbox" checked style="width:auto"> Staff attendance</label><label><input id="mE" type="checkbox" checked style="width:auto"> Events and guest check-in</label></fieldset>
    <button>Register organization</button>
   </form>
   <form id="fJoin" class="hide">
@@ -86,7 +95,7 @@ button.del.ok{color:var(--pri)}
 </section>
 
 <section id="app" class="hide">
- <div class="top"><b id="topName">SmartTrack</b><button id="burger" aria-label="Menu">Menu</button></div>
+ <div class="top"><b id="topName">SmartTrack</b><span><button id="burger" aria-label="Menu">Menu</button><button id="tlo">Log out</button></span></div>
  <div class="app">
   <nav id="nav"></nav>
   <main id="main"></main>
@@ -114,7 +123,8 @@ $('#fLogin').onsubmit=async e=>{e.preventDefault();authMsg('');
 
 $('#fReg').onsubmit=async e=>{e.preventDefault();authMsg('');
  const pending={name:$('#rName').value.trim(),type:$('#rType').value,email:$('#rEmail').value.trim(),
-  phone:$('#rPhone').value.trim(),address:$('#rAddr').value.trim(),admin:$('#rAdmin').value.trim()};
+  phone:$('#rPhone').value.trim(),address:$('#rAddr').value.trim(),admin:$('#rAdmin').value.trim(),modules:[$('#mS').checked&&'staff',$('#mE').checked&&'events'].filter(Boolean)};
+ if(!pending.modules.length)return authMsg('Choose at least one use.',1);
  const {data,error}=await sb.auth.signUp({email:pending.email,password:$('#rPass').value,
   options:{data:{full_name:pending.admin,pending_org:pending}}});
  if(error)return authMsg(error.message,1);
@@ -131,14 +141,14 @@ async function boot(){
   if(pi){const c=await sb.rpc('claim_invite',{p_code:pi.code,p_name:pi.name});if(c.error){await sb.auth.signOut();showAuth();return authMsg(c.error.message,1)}return boot()}
   const p=session.user.user_metadata?.pending_org;
   if(!p){await sb.auth.signOut();showAuth();return authMsg('This account is not linked to an organization yet. Register one first.',1)}
-  const r=await sb.rpc('register_organization',{p_name:p.name,p_type:p.type,p_email:p.email,p_phone:p.phone,p_address:p.address,p_admin_name:p.admin});
+  const r=await sb.rpc('register_organization',{p_name:p.name,p_type:p.type,p_email:p.email,p_phone:p.phone,p_address:p.address,p_admin_name:p.admin,p_modules:p.modules||['staff','events']});
   if(r.error){await sb.auth.signOut();showAuth();return authMsg(r.error.message,1)}
   return boot();
  }
  ORG=m[0].organizations;ROLE=m[0].role;
  $('#auth').classList.add('hide');$('#app').classList.remove('hide');
  if(ROLE!=='org_admin'){buildOther();return}
- buildNav();go('dash');
+ enterAdmin();
 }
 async function logout(){await sb.auth.signOut();ORG=null;showAuth()}
 
@@ -147,7 +157,7 @@ const NAV=[['dash','Dashboard'],['scan','Scan attendance'],['staff','Staff & QR 
 function buildNav(){
  $('#topName').textContent=ORG.name;
  $('#nav').innerHTML=`<div class="brand">${ORG.logo_url?`<img src="${esc(ORG.logo_url)}" alt="">`:''}<span>${esc(ORG.name)}</span></div>`+
-  (window.NAV2||NAV).map(([k,l,s])=>s?`<a class="off" aria-disabled="true">${l}<small>${s}</small></a>`:`<a data-v="${k}" tabindex="0">${l}</a>`).join('')+
+  navFor().map(([k,l,s])=>s?`<a class="off" aria-disabled="true">${l}<small>${s}</small></a>`:`<a data-v="${k}" tabindex="0">${l}</a>`).join('')+
   `<a id="lo" style="margin-top:auto" tabindex="0">Log out</a>`;
  $('#nav').querySelectorAll('[data-v]').forEach(a=>{a.onclick=()=>go(a.dataset.v);a.onkeydown=e=>{if(e.key==='Enter')go(a.dataset.v)}});
  $('#lo').onclick=logout;$('#burger').onclick=()=>$('#nav').classList.toggle('open');
@@ -155,7 +165,7 @@ function buildNav(){
 function go(v){
  $('#nav').classList.remove('open');clearInterval(window.ET);if(scanner){scanner.stop().catch(()=>{});scanner=null}
  $('#nav').querySelectorAll('[data-v]').forEach(a=>a.classList.toggle('on',a.dataset.v===v));
- ({dash:dashView,departments:()=>listView('departments','Departments'),branches:()=>listView('branches','Branches'),settings:settingsView,staff:staffView,schedules:scheduleView,attendance:attView,scan:scanView,me:meView,requests:reqView,myreq:myReqView,events:eventsView,evscan:evScanView})[v]();
+ ({dash:dashView,departments:()=>listView('departments','Departments'),branches:()=>listView('branches','Branches'),settings:settingsView,staff:staffView,schedules:scheduleView,attendance:attView,scan:scanView,me:meView,requests:reqView,myreq:myReqView,events:eventsView,evscan:evScanView,home:homeView})[v]();
 }
 
 async function dashView(){
@@ -481,6 +491,59 @@ async function showTicket(token){
  new QRCode($('#tq'),{text:token,width:220,height:220,correctLevel:QRCode.CorrectLevel.M});
  $('#td').onclick=()=>{const c=$('#tq canvas'),a=document.createElement('a');a.href=c.toDataURL('image/png');a.download=`ticket-${data.reg_code}.png`;a.click()};
 }
+
+/* ---------- Phase 3b: separate workspaces, new scan screens ---------- */
+const NAVS=[['dash','Dashboard'],['scan','Scan attendance'],['staff','Staff & QR codes'],['attendance','Attendance records'],['schedules','Work schedules'],['requests','Leave & corrections'],['departments','Departments'],['branches','Branches'],['settings','Organization settings'],['x6','Reports','Phase 4'],['x7','Notifications','Phase 4']];
+const NAVE=[['events','Events'],['evscan','Guest check-in'],['settings','Organization settings'],['x6','Event reports','Phase 4']];
+let WS=null,SM=null;
+function navFor(){if(window.NAV2)return window.NAV2;const sw=(ORG.modules||['staff','events']).length>1?[['home','Switch workspace']]:[];
+ return WS==='events'?NAVE.concat(sw):WS==='staff'?NAVS.concat(sw):[['home','Home']]}
+function enterAdmin(){window.NAV2=null;const m=ORG.modules||['staff','events'];if(m.length>1){WS=null;buildNav();go('home')}else openWS(m[0])}
+function openWS(w){WS=w;buildNav();go(w==='events'?'events':'dash')}
+function homeView(){const m=ORG.modules||['staff','events'];
+ $('#main').innerHTML=`<h2>Choose a workspace</h2><p style="color:var(--mut)">Staff attendance and event guest check-in are managed separately.</p>${m.includes('staff')?`<button class="big" id="hS" style="height:92px;margin:.5rem 0">STAFF ATTENDANCE<br><small>Staff, QR ID cards, arrival and departure</small></button>`:''}${m.includes('events')?`<button class="big" id="hE" style="height:92px;background:#2f5d9f;margin:.5rem 0">EVENTS & GUESTS<br><small>Registration, QR tickets, guest check-in</small></button>`:''}`;
+ if($('#hS'))$('#hS').onclick=()=>openWS('staff');if($('#hE'))$('#hE').onclick=()=>openWS('events')}
+$('#tlo').onclick=logout;
+const camBox='<div class="cam"><span id="co">Camera is off</span><div id="rd"></div></div>';
+const manual='<details style="margin-top:.75rem"><summary>Enter code manually</summary><form id="mf" class="row" style="margin-top:.5rem"><input id="mt" placeholder="Paste QR code text" aria-label="QR code text"><button class="ghost">Check</button></form></details>';
+function camToggle(cb,needMode){return async()=>{
+ if(scanner){await scanner.stop().catch(()=>{});scanner=null;$('#co').classList.remove('hide');$('#st').textContent='Start camera';return}
+ if(needMode&&!SM)return $('#mh').textContent='Choose ARRIVAL or DEPARTURE first';
+ scanner=new Html5Qrcode('rd');scanner.start({facingMode:'environment'},{fps:10,qrbox:240},cb).then(()=>{$('#co').classList.add('hide');$('#st').textContent='Stop camera'}).catch(e=>{scanner=null;$('#res').innerHTML=err({message:'Camera not available: '+e})})}}
+function scanView(){SM=null;
+ $('#main').innerHTML=`<div class="panel"><div class="row" style="gap:.75rem"><button id="mA" class="mbtn" style="background:#0f6b4b">ARRIVAL</button><button id="mD" class="mbtn" style="background:#2f5d9f">DEPARTURE</button></div><p class="hint" id="mh">Choose ARRIVAL or DEPARTURE first</p>${camBox}<button id="st" class="big">Start camera</button>${manual}</div><div id="res"></div>`;
+ const pick=m=>{SM=m;$('#mA').classList.toggle('on',m==='arrival');$('#mD').classList.toggle('on',m==='departure');$('#mh').textContent=`Mode: ${m.toUpperCase()}. Scan staff QR codes.`};
+ $('#mA').onclick=()=>pick('arrival');$('#mD').onclick=()=>pick('departure');
+ $('#st').onclick=camToggle(t=>handleScan(t),true);$('#mf').onsubmit=e=>{e.preventDefault();handleScan($('#mt').value,true)};
+}
+async function handleScan(tok,force){if(!SM)return $('#mh').textContent='Choose ARRIVAL or DEPARTURE first';
+ if(!force&&tok===lastTok&&Date.now()-lastAt<4000)return;lastTok=tok;lastAt=Date.now();
+ const {data,error}=await sb.rpc('scan_staff_mode',{p_token:tok,p_mode:SM});if(error)return $('#res').innerHTML=err(error);
+ const M={CHECKED_IN:['ARRIVAL RECORDED','#e3f6ec'],CHECKED_OUT:['DEPARTURE RECORDED','#e3f6ec'],ALREADY_CHECKED_IN:['ALREADY ARRIVED TODAY','#fff4d6'],ALREADY_COMPLETE:['DEPARTURE ALREADY RECORDED','#fff4d6'],NO_ARRIVAL:['NO ARRIVAL TODAY. Scan ARRIVAL first.','#fff4d6'],INVALID:['INVALID QR CODE','#fde8e6'],INACTIVE:['STAFF ACCOUNT IS INACTIVE','#fde8e6']}[data.result]||[data.result,'#fde8e6'];
+ $('#res').innerHTML=`<div class="panel" style="background:${M[1]}"><h3>${esc(M[0])}</h3>${data.name?`<div style="display:flex;gap:.75rem">${data.photo?`<img src="${esc(data.photo)}" alt="" style="width:72px;height:72px;object-fit:cover;border-radius:8px">`:''}<div><b>${esc(data.name)}</b><br>${esc(data.code||'')} · ${esc(data.dept||'No department')} · ${esc(data.branch||'No branch')}<br>Status: ${esc((data.status||'').replace('_',' '))}${data.dep==='early'?' · left early':''}${data.ot?' · overtime '+data.ot+' min':''}<br>In ${fmt(data['in'])} · Out ${fmt(data.out)}</div></div>`:''}</div>`}
+async function evScanView(){
+ const {data,error}=await sb.from('events').select('id,title').eq('status','published').order('starts_at',{ascending:false});
+ if(error)return $('#main').innerHTML=err(error);
+ $('#main').innerHTML=`<div class="panel"><label>Event<select id="es">${(data||[]).map(e=>`<option value="${e.id}"${e.id===EVSEL?' selected':''}>${esc(e.title)}</option>`).join('')||'<option value="">No events available</option>'}</select></label><label>Entry point<input id="en" value="Main gate" maxlength="60"></label>${camBox}<button id="st" class="big" style="background:#2f5d9f">Start camera</button>${manual}</div><div id="res"></div>`;
+ $('#st').onclick=camToggle(t=>handleEv(t),false);$('#mf').onsubmit=e=>{e.preventDefault();handleEv($('#mt').value,true)};
+}
+
+/* ---------- Staff scanner: automatic sign in / sign out by default ---------- */
+function scanView(){SM=null;
+ $('#main').innerHTML=`<div class="panel"><div class="row" style="gap:.75rem"><button id="mA" class="mbtn" style="background:#0f6b4b">ARRIVAL</button><button id="mD" class="mbtn" style="background:#2f5d9f">DEPARTURE</button></div><p class="hint" id="mh">Automatic mode: the first scan signs in, a later scan signs out. Tap ARRIVAL or DEPARTURE to choose manually.</p>${camBox}<button id="st" class="big">Start camera</button>${manual}</div><div id="res"></div>`;
+ const pick=m=>{SM=SM===m?null:m;$('#mA').classList.toggle('on',SM==='arrival');$('#mD').classList.toggle('on',SM==='departure');
+  $('#mh').textContent=SM?`Manual mode: ${SM.toUpperCase()}. Tap it again to go back to automatic.`:'Automatic mode: the first scan signs in, a later scan signs out. Tap ARRIVAL or DEPARTURE to choose manually.'};
+ $('#mA').onclick=()=>pick('arrival');$('#mD').onclick=()=>pick('departure');
+ $('#st').onclick=camToggle(t=>handleScan(t),false);$('#mf').onsubmit=e=>{e.preventDefault();handleScan($('#mt').value,true)};
+}
+async function handleScan(tok,force){
+ if(!force&&tok===lastTok&&Date.now()-lastAt<4000)return;lastTok=tok;lastAt=Date.now();
+ const {data,error}=SM?await sb.rpc('scan_staff_mode',{p_token:tok,p_mode:SM}):await sb.rpc('scan_staff',{p_token:tok});
+ if(error)return $('#res').innerHTML=err(error);
+ const M={CHECKED_IN:['Successful sign in','#dff3e8',1],CHECKED_OUT:['Successful sign out','#dff3e8',1],ALREADY_CHECKED_IN:['Already signed in today','#fff4d6'],ALREADY_COMPLETE:['Already signed out today','#fff4d6'],NO_ARRIVAL:['No sign in today. Scan ARRIVAL first.','#fff4d6'],INVALID:['Invalid or unknown QR code','#fde8e6'],INACTIVE:['Staff account is inactive','#fde8e6']}[data.result]||[data.result,'#fde8e6'];
+ if(M[2]&&navigator.vibrate)navigator.vibrate(200);
+ const when=data.result==='CHECKED_OUT'?data.out:data['in'];
+ $('#res').innerHTML=`<div class="panel" style="background:${M[1]}"><h2 style="font-size:1.7rem;margin:0 0 .4rem">${esc(M[0])}</h2>${data.name?`<div style="display:flex;gap:.75rem">${data.photo?`<img src="${esc(data.photo)}" alt="" style="width:76px;height:76px;object-fit:cover;border-radius:12px">`:''}<div><b>${esc(data.name)}</b><br>${esc(data.code||'')} · ${esc(data.dept||'No department')} · ${esc(data.branch||'No branch')}<br>Time: <b>${fmt(when)}</b>${data.result==='CHECKED_IN'?' · '+esc((data.status||'').replace('_',' ')):''}${data.result==='CHECKED_OUT'&&(data.dep==='early'||data.departure_status==='early')?' · left early':''}${data.ot?' · overtime '+data.ot+' min':''}</div></div>`:''}</div>`}
 
 sb.auth.onAuthStateChange(ev=>{if(ev==='SIGNED_OUT')showAuth()});
 const QS=new URLSearchParams(location.search);
