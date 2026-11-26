@@ -93,6 +93,7 @@ button.del.ok{color:var(--pri)}
  </div>
 </section>
 
+<section id="pub" class="auth hide"></section>
 <div id="modal" class="overlay hide"></div>
 <script>
 const SB_URL='https://abnfuzrfmsrzmfnnqdfw.supabase.co', SB_KEY='sb_publishable_h8pmqoi-VMOWDJwoZPaVIA_KOAlXSlG'; // anon key only. Never the service role key.
@@ -141,7 +142,7 @@ async function boot(){
 }
 async function logout(){await sb.auth.signOut();ORG=null;showAuth()}
 
-const NAV=[['dash','Dashboard'],['scan','Scan attendance'],['staff','Staff & QR codes'],['attendance','Attendance records'],['schedules','Work schedules'],['departments','Departments'],['branches','Branches'],['settings','Organization settings'],
+const NAV=[['dash','Dashboard'],['scan','Scan attendance'],['staff','Staff & QR codes'],['attendance','Attendance records'],['schedules','Work schedules'],['events','Events'],['evscan','Event check-in'],['departments','Departments'],['branches','Branches'],['settings','Organization settings'],
  ['requests','Leave & corrections'],['x6','Reports','Phase 4'],['x7','Notifications','Phase 4']];
 function buildNav(){
  $('#topName').textContent=ORG.name;
@@ -152,9 +153,9 @@ function buildNav(){
  $('#lo').onclick=logout;$('#burger').onclick=()=>$('#nav').classList.toggle('open');
 }
 function go(v){
- $('#nav').classList.remove('open');if(scanner){scanner.stop().catch(()=>{});scanner=null}
+ $('#nav').classList.remove('open');clearInterval(window.ET);if(scanner){scanner.stop().catch(()=>{});scanner=null}
  $('#nav').querySelectorAll('[data-v]').forEach(a=>a.classList.toggle('on',a.dataset.v===v));
- ({dash:dashView,departments:()=>listView('departments','Departments'),branches:()=>listView('branches','Branches'),settings:settingsView,staff:staffView,schedules:scheduleView,attendance:attView,scan:scanView,me:meView,requests:reqView,myreq:myReqView})[v]();
+ ({dash:dashView,departments:()=>listView('departments','Departments'),branches:()=>listView('branches','Branches'),settings:settingsView,staff:staffView,schedules:scheduleView,attendance:attView,scan:scanView,me:meView,requests:reqView,myreq:myReqView,events:eventsView,evscan:evScanView})[v]();
 }
 
 async function dashView(){
@@ -316,11 +317,11 @@ $('#fJoin').onsubmit=async e=>{e.preventDefault();authMsg('');
  const {data,error}=await sb.auth.signUp({email:$('#jEmail').value.trim(),password:$('#jPass').value,options:{data:{full_name:pi.name,pending_invite:pi}}});
  if(error)return authMsg(error.message,1);
  if(data.session)boot();else{authMsg('Check your email to confirm, then log in. Your invite is applied at first login.');tab('login')}};
-function buildOther(){window.NAV2=ROLE==='staff'?[['me','My attendance'],['myreq','Leave & corrections']]:[['scan','Scan attendance'],['attendance','Attendance records']];buildNav();go(ROLE==='staff'?'me':'scan')}
-async function inviteModal(s){
- const r=await sb.rpc('create_invite',{p_org:ORG.id,p_role:s?'staff':'attendance_officer',p_staff:s?s.id:null});
+function buildOther(){window.NAV2=ROLE==='staff'?[['me','My attendance'],['myreq','Leave & corrections']]:ROLE==='event_officer'?[['evscan','Event check-in']]:[['scan','Scan attendance'],['attendance','Attendance records']];buildNav();go(ROLE==='staff'?'me':ROLE==='event_officer'?'evscan':'scan')}
+async function inviteModal(s,role){
+ const r=await sb.rpc('create_invite',{p_org:ORG.id,p_role:s?'staff':(role||'attendance_officer'),p_staff:s?s.id:null});
  if(r.error)return alert(r.error.message);
- modal(`<h3>Invite ${s?esc(s.full_name):'attendance officer'}</h3><p>Give them this code. It works once and expires in 7 days.</p><p style="font-size:1.8rem;font-weight:700;letter-spacing:.1em">${esc(r.data)}</p><p>They open <b>${esc(location.origin+location.pathname)}</b>, tap <b>Join with code</b>, and enter their name, email, a password and this code.</p>`)}
+ modal(`<h3>Invite ${s?esc(s.full_name):(role==='event_officer'?'event officer':'attendance officer')}</h3><p>Give them this code. It works once and expires in 7 days.</p><p style="font-size:1.8rem;font-weight:700;letter-spacing:.1em">${esc(r.data)}</p><p>They open <b>${esc(location.origin+location.pathname)}</b>, tap <b>Join with code</b>, and enter their name, email, a password and this code.</p>`)}
 async function meView(){
  const uid=(await sb.auth.getUser()).data.user.id;
  const {data:s}=await sb.from('staff').select('*,departments(name),branches(name)').eq('user_id',uid).maybeSingle();
@@ -365,8 +366,125 @@ async function myReqView(){
  $('#cf').onsubmit=async e=>{e.preventDefault();const r=await sb.rpc('request_correction',{p_date:$('#cd').value,p_in:$('#ci').value||null,p_out:$('#co').value||null,p_reason:$('#cr').value});if(r.error)return $('#rm').innerHTML=err(r.error);myReqView()};
 }
 
+/* ---------- Phase 3: events ---------- */
+const dtl=v=>v?new Date(v).toLocaleString([],{dateStyle:'medium',timeStyle:'short'}):'—';
+const toLoc=v=>v?new Date(new Date(v)-new Date(v).getTimezoneOffset()*6e4).toISOString().slice(0,16):'';
+const evLink=s=>location.origin+location.pathname+'?e='+s;
+const csvc=v=>{let s=String(v??'');if(/^[=+\-@]/.test(s))s="'"+s;return '"'+s.replace(/"/g,'""')+'"'};
+function dlCSV(n,rows){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([rows.map(r=>r.map(csvc).join(',')).join('\n')],{type:'text/csv'}));a.download=n;a.click()}
+let EVS=[],EVSEL=null,lastEv='',lastEvAt=0;
+async function eventsView(){
+ const {data,error}=await sb.from('events').select('*').eq('organization_id',ORG.id).order('starts_at',{ascending:false});
+ if(error)return $('#main').innerHTML=err(error);EVS=data;
+ $('#main').innerHTML=`<h2>Events</h2><div class="row" style="flex-wrap:wrap;margin-bottom:.75rem"><button id="ne">Create event</button><button class="ghost" id="ie">Invite event officer</button></div>
+ <ul class="list" id="evl">${data.map(e=>`<li><span><b>${esc(e.title)}</b><br><small>${dtl(e.starts_at)} · ${esc(e.venue)} · ${esc(e.status)}</small></span><span><button class="del ok" data-a="mg" data-id="${e.id}">Manage</button><button class="del ok" data-a="ed" data-id="${e.id}">Edit</button></span></li>`).join('')||'<p class="empty">No events yet. Create the first one.</p>'}</ul>`;
+ $('#ne').onclick=()=>eventForm(null);$('#ie').onclick=()=>inviteModal(null,'event_officer');
+ $('#evl').onclick=e=>{const b=e.target.closest('button[data-a]');if(!b)return;const ev=EVS.find(x=>x.id===b.dataset.id);b.dataset.a==='mg'?manageView(ev):eventForm(ev)};
+}
+function eventForm(ev){
+ const x=ev||{},cf=(x.custom_fields||[]).map(f=>f.label+(f.required?'*':'')).join('\n');
+ const i=(id,l,v,t='text',r='')=>`<label>${l}<input id="${id}" type="${t}" value="${esc(v)}" ${r}></label>`;
+ const so=(id,l,cur,L)=>`<label>${l}<select id="${id}">${L.map(([k,n])=>`<option value="${k}"${cur===k?' selected':''}>${n}</option>`).join('')}</select></label>`;
+ modal(`<h3>${ev?'Edit':'Create'} event</h3><form id="ef">${i('eT','Event title',x.title,'text','required maxlength=150')}
+ <label>Description<textarea id="eD" rows="3" style="width:100%">${esc(x.description)}</textarea></label>
+ ${i('eC','Category (e.g. Conference)',x.category)}${i('eV','Venue',x.venue,'text','required')}${i('eA','Venue address',x.venue_address)}
+ ${i('eS','Starts',toLoc(x.starts_at),'datetime-local','required')}${i('eE','Ends',toLoc(x.ends_at),'datetime-local','required')}
+ ${i('eM','Maximum participants (blank = unlimited)',x.max_participants,'number','min=1')}${i('eO','Registration opens',toLoc(x.reg_opens),'datetime-local')}${i('eL','Registration closes',toLoc(x.reg_closes),'datetime-local')}
+ ${i('eR','Registration requirements',x.requirements)}
+ ${so('eVi','Visibility',x.visibility||'public',[['public','Public: people register online'],['private','Private: organizer registers people']])}
+ ${so('eRe','Entry rule',x.reentry||'single',[['single','Single entry'],['multiple','Re-entry allowed']])}
+ ${so('eSt','Status',x.status||'published',[['published','Published'],['draft','Draft (hidden)'],['cancelled','Cancelled']])}
+ <label>Extra questions (one per line, end with * if required)<textarea id="eQ" rows="3" style="width:100%">${esc(cf)}</textarea></label>
+ <label>Banner or poster<input id="eB" type="file" accept="image/png,image/jpeg,image/webp"></label><button>Save event</button></form><div id="fm"></div>`);
+ $('#ef').onsubmit=async e=>{e.preventDefault();let banner=x.banner_url||null;const f=$('#eB').files[0];
+  if(f){if(f.size>1048576)return $('#fm').innerHTML='<div class="msg err">Banner must be under 1 MB.</div>';
+   const p=`${ORG.id}/${Date.now()}.${f.type.split('/')[1]}`;const up=await sb.storage.from('event-banners').upload(p,f,{contentType:f.type});
+   if(up.error)return $('#fm').innerHTML=err(up.error);banner=sb.storage.from('event-banners').getPublicUrl(p).data.publicUrl}
+  const v=id=>$(id).value.trim()||null,iso=id=>$(id).value?new Date($(id).value).toISOString():null;
+  const row={title:$('#eT').value.trim(),description:v('#eD'),category:v('#eC'),venue:$('#eV').value.trim(),venue_address:v('#eA'),starts_at:iso('#eS'),ends_at:iso('#eE'),max_participants:$('#eM').value?+$('#eM').value:null,reg_opens:iso('#eO'),reg_closes:iso('#eL'),requirements:v('#eR'),visibility:$('#eVi').value,reentry:$('#eRe').value,status:$('#eSt').value,banner_url:banner,
+   custom_fields:$('#eQ').value.split('\n').map(s=>s.trim()).filter(Boolean).map(s=>({label:s.replace(/\*$/,'').trim().slice(0,120),required:s.endsWith('*')}))};
+  const slug=(row.title.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,40)||'event')+'-'+Math.random().toString(36).slice(2,6);
+  const r=ev?await sb.from('events').update(row).eq('id',ev.id).eq('organization_id',ORG.id):await sb.from('events').insert({...row,organization_id:ORG.id,slug});
+  if(r.error)return $('#fm').innerHTML=err(r.error);$('#modal').classList.add('hide');eventsView()};
+}
+async function manageView(ev){
+ clearInterval(window.ET);
+ const [R,O]=await Promise.all([sb.from('event_registrations').select('*,event_tickets(token,checkins,first_checked_in_at)').eq('event_id',ev.id).order('created_at'),
+  sb.from('event_attendance_officers').select('user_id,email,full_name').eq('event_id',ev.id)]);
+ if(R.error)return $('#main').innerHTML=err(R.error);
+ const P=R.data,tk=x=>Array.isArray(x.event_tickets)?x.event_tickets[0]:x.event_tickets;
+ $('#main').innerHTML=`<h2>${esc(ev.title)}</h2><p style="color:var(--mut)">${dtl(ev.starts_at)} · ${esc(ev.venue)} · ${esc(ev.status)}</p>
+ <p><small>Registration link: <b style="word-break:break-all">${esc(evLink(ev.slug))}</b></small></p>
+ <div id="est" class="stats"></div>
+ <div class="row" style="flex-wrap:wrap;margin-bottom:.75rem"><button id="sc">Scan tickets</button><button class="ghost" id="rg">Register participant</button><button class="ghost" id="ex">Export CSV</button><button class="ghost" id="bk">Back</button></div><div id="em2"></div>
+ <h3>Entry officers</h3><form id="of" class="row"><input id="oe" type="email" required placeholder="Officer email" aria-label="Officer email"><button>Assign</button></form>
+ <ul class="list" id="ol">${(O.data||[]).map(o=>`<li><span>${esc(o.full_name||'')} <small>${esc(o.email)}</small></span><button class="del" data-u="${o.user_id}">Remove</button></li>`).join('')||'<p class="empty">No officers assigned. Admins can always scan.</p>'}</ul>
+ <div id="rc"></div><h3>Participants (${P.length})</h3><input id="pq" placeholder="Search participants" aria-label="Search">
+ <ul class="list" id="pl">${P.map(r=>{const t=tk(r);return `<li data-k="${esc((r.full_name+' '+r.email+' '+r.reg_code).toLowerCase())}"><span><b>${esc(r.full_name)}</b> <small>${esc(r.reg_code)}</small><br><small>${esc(r.email)} · ${r.status==='cancelled'?'cancelled':t?.checkins?'checked in '+fmt(t.first_checked_in_at):'not yet arrived'}</small></span><span><button class="del ok" data-a="tk" data-id="${r.id}">Ticket</button>${r.status==='registered'?`<button class="del" data-a="cn" data-id="${r.id}">Cancel</button>`:''}</span></li>`}).join('')||'<p class="empty">No participants yet.</p>'}</ul>`;
+ const stats=async()=>{const {data}=await sb.rpc('event_stats',{p_event:ev.id});if(!data||!$('#est'))return;
+  $('#est').innerHTML=[[data.registered,'Registered'],[data.checked_in,'Checked in'],[Math.max(0,data.registered-data.checked_in),'Yet to arrive'],[(data.registered?Math.round(100*data.checked_in/data.registered):0)+'%','Check-in rate']].map(([n,l])=>`<div class="stat"><b>${n}</b><span>${l}</span></div>`).join('');
+  $('#rc').innerHTML='<h3>Recent scans (live)</h3><ul class="list">'+((data.recent||[]).map(c=>`<li><span>${esc(c.name||'Unknown')} <small>${fmt(c.at)} · ${esc(c.entry)}</small></span><small>${esc(c.result)}</small></li>`).join('')||'<p class="empty">No scans yet.</p>')+'</ul>'};
+ stats();window.ET=setInterval(stats,5000);
+ $('#sc').onclick=()=>{EVSEL=ev.id;go('evscan')};$('#bk').onclick=()=>{clearInterval(window.ET);eventsView()};
+ $('#pq').oninput=e=>document.querySelectorAll('#pl li').forEach(li=>li.classList.toggle('hide',!li.dataset.k.includes(e.target.value.toLowerCase())));
+ $('#ex').onclick=()=>dlCSV(`participants-${ev.slug}.csv`,[['reg_code','name','email','phone','organization','gender','status','source','registered_at','checked_in','entries','first_check_in','answers']].concat(P.map(r=>{const t=tk(r)||{};return [r.reg_code,r.full_name,r.email,r.phone,r.organization_name,r.gender,r.status,r.source,r.created_at,t.checkins?'Yes':'No',t.checkins||0,t.first_checked_in_at||'',JSON.stringify(r.answers)]})));
+ $('#rg').onclick=()=>{modal(`<h3>Register participant</h3><form id="rf"><label>Full name<input id="mN" required maxlength="120"></label><label>Email<input id="mE" type="email" required></label><label>Phone<input id="mP" type="tel"></label><button>Register</button></form><div id="fm"></div>`);
+  $('#rf').onsubmit=async e=>{e.preventDefault();const r=await sb.rpc('admin_register',{p_event:ev.id,p_name:$('#mN').value,p_email:$('#mE').value,p_phone:$('#mP').value});
+   if(r.error)return $('#fm').innerHTML=err(r.error);$('#modal').classList.add('hide');manageView(ev)}};
+ $('#of').onsubmit=async e=>{e.preventDefault();const r=await sb.rpc('assign_event_officer',{p_event:ev.id,p_email:$('#oe').value});if(r.error)return $('#em2').innerHTML=err(r.error);manageView(ev)};
+ $('#ol').onclick=async e=>{const b=e.target.closest('button[data-u]');if(!b||!confirm('Remove this officer?'))return;await sb.from('event_attendance_officers').delete().eq('event_id',ev.id).eq('user_id',b.dataset.u);manageView(ev)};
+ $('#pl').onclick=async e=>{const b=e.target.closest('button[data-a]');if(!b)return;const r=P.find(x=>x.id===b.dataset.id);
+  if(b.dataset.a==='tk')ticketModal(r,tk(r).token,ev);
+  else if(confirm(`Cancel registration for ${r.full_name}? Their ticket stops working.`)){const x=await sb.rpc('cancel_registration',{p_reg:r.id});if(x.error)return $('#em2').innerHTML=err(x.error);manageView(ev)}};
+}
+function ticketModal(r,token,ev){
+ const link=location.origin+location.pathname+'?t='+token;
+ modal(`<div id="card" style="text-align:center"><b>${esc(ev.title)}</b><h3>${esc(r.full_name)}</h3><div>${esc(r.reg_code)}</div><div id="qr" style="display:inline-block;margin:.75rem;padding:8px;background:#fff"></div></div>
+ <label class="noprint">Ticket link (share with the participant)<input readonly value="${esc(link)}" onclick="this.select()"></label>
+ <div class="row noprint" style="flex-wrap:wrap"><button id="dl">Download QR</button><button id="pr">Print</button><button class="ghost" id="rt">Replace ticket</button></div>`);
+ new QRCode($('#qr'),{text:token,width:200,height:200,correctLevel:QRCode.CorrectLevel.M});
+ $('#dl').onclick=()=>{const c=$('#qr canvas'),a=document.createElement('a');a.href=c.toDataURL('image/png');a.download=`ticket-${r.reg_code}.png`;a.click()};$('#pr').onclick=()=>window.print();
+ $('#rt').onclick=async()=>{if(!confirm('Replace this ticket? The old QR stops working immediately.'))return;const x=await sb.rpc('replace_ticket',{p_reg:r.id});if(x.error)return alert(x.error.message);ticketModal(r,x.data,ev)};
+}
+async function evScanView(){
+ const {data,error}=await sb.from('events').select('id,title,starts_at').eq('status','published').order('starts_at',{ascending:false});
+ if(error)return $('#main').innerHTML=err(error);
+ $('#main').innerHTML=`<h2>Event check-in</h2><label>Event<select id="es">${(data||[]).map(e=>`<option value="${e.id}"${e.id===EVSEL?' selected':''}>${esc(e.title)}</option>`).join('')||'<option value="">No events available</option>'}</select></label>
+ <label>Entry point<input id="en" value="Main gate" maxlength="60"></label><div id="rd" style="max-width:360px"></div><div class="row" style="margin:.75rem 0"><button id="st">Start camera</button></div>
+ <form id="mf" class="row"><input id="mt" placeholder="Or paste ticket code" aria-label="Ticket code"><button class="ghost">Check</button></form><div id="res"></div>`;
+ $('#st').onclick=()=>{if(scanner)return;scanner=new Html5Qrcode('rd');scanner.start({facingMode:'environment'},{fps:10,qrbox:240},t=>handleEv(t)).catch(e=>{scanner=null;$('#res').innerHTML=err({message:'Camera not available: '+e})})};
+ $('#mf').onsubmit=e=>{e.preventDefault();handleEv($('#mt').value,true)};
+}
+async function handleEv(tok,force){if(!$('#es')?.value)return;if(!force&&tok===lastEv&&Date.now()-lastEvAt<4000)return;lastEv=tok;lastEvAt=Date.now();
+ const {data,error}=await sb.rpc('scan_ticket',{p_event:$('#es').value,p_token:tok,p_entry:$('#en').value});if(error)return $('#res').innerHTML=err(error);
+ const M={VALID:['VALID TICKET – Participant successfully checked in','#e3f6ec'],ALREADY_CHECKED_IN:['ALREADY CHECKED IN – Ticket has previously been used','#fff4d6'],INVALID:['INVALID TICKET – Ticket does not exist or is invalid','#fde8e6'],WRONG_EVENT:['WRONG EVENT – Ticket belongs to another event','#fde8e6'],CANCELLED:['CANCELLED REGISTRATION – Registration has been cancelled','#fde8e6'],NOT_YET_ELIGIBLE:['NOT YET ELIGIBLE – Check-in is not currently permitted','#fff4d6']}[data.result]||[data.result,'#fde8e6'];
+ $('#res').innerHTML=`<div class="panel" style="background:${M[1]}"><h3>${esc(M[0])}</h3>${data.name?`<b>${esc(data.name)}</b><br>${esc(data.code)}${data.entries?`<br>Entries: ${data.entries} · First check-in ${fmt(data.first_at)}`:''}`:''}</div>`}
+
+/* public pages (no login) */
+function pubShow(h){document.querySelectorAll('body>section').forEach(s=>s.classList.add('hide'));const p=$('#pub');p.classList.remove('hide');p.innerHTML=h}
+async function publicEvent(slug){
+ const {data,error}=await sb.rpc('get_public_event',{p_slug:slug});
+ if(error||!data?.found)return pubShow('<h1>Event not found</h1>');
+ const M={closed:'Registration for this event has closed.',not_open:'Registration has not opened yet.',full:'This event is full.',private:'Registration for this event is by invitation only.',cancelled:'This event has been cancelled.'};
+ const ff=(data.custom_fields||[]).map((f,i)=>`<label>${esc(f.label)}${f.required?' *':''}<input id="q${i}" maxlength="300" ${f.required?'required':''}></label>`).join('');
+ pubShow(`${data.banner_url?`<img src="${esc(data.banner_url)}" alt="" style="width:100%;border-radius:10px">`:''}<h1>${esc(data.title)}</h1><p>${esc(data.organizer)}</p><p><b>${dtl(data.starts_at)}</b> to ${dtl(data.ends_at)}<br>${esc(data.venue)}${data.venue_address?', '+esc(data.venue_address):''}</p>${data.description?`<p>${esc(data.description)}</p>`:''}${data.requirements?`<p><b>Requirements:</b> ${esc(data.requirements)}</p>`:''}
+ ${data.state==='open'?`<form id="pf" class="panel"><h3>Register</h3><label>Full name *<input id="pN" required maxlength="120"></label><label>Email *<input id="pE" type="email" required></label><label>Phone<input id="pP" type="tel"></label><label>Organization (optional)<input id="pO" maxlength="120"></label><label>Gender (optional)<select id="pG"><option value="">—</option><option>Male</option><option>Female</option></select></label>${ff}<button>Register</button><div id="pm"></div></form>`:`<div class="msg err">${esc(M[data.state]||'Registration is not available.')}</div>`}`);
+ if(data.state!=='open')return;
+ $('#pf').onsubmit=async e=>{e.preventDefault();const ans={};(data.custom_fields||[]).forEach((f,i)=>ans[f.label]=$('#q'+i).value.trim());
+  const r=await sb.rpc('register_participant',{p_slug:slug,p_name:$('#pN').value,p_email:$('#pE').value,p_phone:$('#pP').value,p_org:$('#pO').value,p_gender:$('#pG').value,p_answers:ans});
+  if(r.error)return $('#pm').innerHTML=err(r.error);history.replaceState(null,'','?t='+r.data.token);showTicket(r.data.token)};
+}
+async function showTicket(token){
+ const {data,error}=await sb.rpc('get_ticket',{p_token:token});
+ if(error||!data?.found)return pubShow('<h1>Ticket not found</h1>');
+ pubShow(`<h1>${esc(data.title)}</h1><div class="panel" style="text-align:center"><p><b>${esc(data.name)}</b><br>Registration ID: <b>${esc(data.reg_code)}</b></p><div id="tq" style="display:inline-block;padding:8px;background:#fff"></div><p>${dtl(data.starts_at)}<br>${esc(data.venue)}</p>${data.status==='cancelled'?'<div class="msg err">This registration has been cancelled.</div>':''}<button id="td">Download QR ticket</button><p><small>Registration successful. Save this page link or the image. Show the QR code at the entrance and do not share it.</small></p></div>`);
+ new QRCode($('#tq'),{text:token,width:220,height:220,correctLevel:QRCode.CorrectLevel.M});
+ $('#td').onclick=()=>{const c=$('#tq canvas'),a=document.createElement('a');a.href=c.toDataURL('image/png');a.download=`ticket-${data.reg_code}.png`;a.click()};
+}
+
 sb.auth.onAuthStateChange(ev=>{if(ev==='SIGNED_OUT')showAuth()});
-boot();
+const QS=new URLSearchParams(location.search);
+if(QS.get('e'))publicEvent(QS.get('e'));else if(QS.get('t'))showTicket(QS.get('t'));else boot();
 </script>
 </body>
 </html>
