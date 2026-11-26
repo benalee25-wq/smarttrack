@@ -55,7 +55,7 @@ nav{background:#0b3d2e}nav a.on,nav a:hover{background:#14634a}
 .panel{border-radius:16px}button{border-radius:12px}
 .mbtn{flex:1;height:72px;font-size:1.25rem;font-weight:700;letter-spacing:.02em;opacity:.55}.mbtn.on{opacity:1;box-shadow:0 0 0 3px #f5a524}
 .cam{position:relative;background:#13273d;border:12px solid #9fb0aa;border-radius:26px;min-height:300px;overflow:hidden;display:flex;align-items:center;justify-content:center;color:#fff;margin:.75rem 0}
-.cam #rd{width:100%}
+.cam{display:block}.cam #rd{width:100%}.cam #rd video{width:100%!important;height:auto!important;display:block;margin:0 auto}#co{display:block;text-align:center;padding:128px 0;font-size:1.15rem}
 .big{width:100%;height:56px;font-size:1.15rem;font-weight:700;border-radius:12px;line-height:1.2}
 .hint{text-align:center;font-weight:700;font-size:1.25rem;margin:.75rem 0}
 </style>
@@ -544,6 +544,15 @@ async function handleScan(tok,force){
  if(M[2]&&navigator.vibrate)navigator.vibrate(200);
  const when=data.result==='CHECKED_OUT'?data.out:data['in'];
  $('#res').innerHTML=`<div class="panel" style="background:${M[1]}"><h2 style="font-size:1.7rem;margin:0 0 .4rem">${esc(M[0])}</h2>${data.name?`<div style="display:flex;gap:.75rem">${data.photo?`<img src="${esc(data.photo)}" alt="" style="width:76px;height:76px;object-fit:cover;border-radius:12px">`:''}<div><b>${esc(data.name)}</b><br>${esc(data.code||'')} · ${esc(data.dept||'No department')} · ${esc(data.branch||'No branch')}<br>Time: <b>${fmt(when)}</b>${data.result==='CHECKED_IN'?' · '+esc((data.status||'').replace('_',' ')):''}${data.result==='CHECKED_OUT'&&(data.dep==='early'||data.departure_status==='early')?' · left early':''}${data.ot?' · overtime '+data.ot+' min':''}</div></div>`:''}</div>`}
+
+/* ---------- Camera fix: centered full-width preview, sharper scanning ---------- */
+function camToggle(cb,needMode){return async()=>{
+ if(scanner){await scanner.stop().catch(()=>{});scanner=null;$('#co').classList.remove('hide');$('#st').textContent='Start camera';return}
+ if(needMode&&!SM)return $('#mh').textContent='Choose ARRIVAL or DEPARTURE first';
+ scanner=new Html5Qrcode('rd',{formatsToSupport:[0],experimentalFeatures:{useBarCodeDetectorIfSupported:true},verbose:false});
+ scanner.start({facingMode:'environment'},{fps:15,qrbox:(w,h)=>{const s=Math.floor(Math.min(w,h)*0.7);return{width:s,height:s}}},cb)
+  .then(()=>{$('#co').classList.add('hide');$('#st').textContent='Stop camera';try{scanner.applyVideoConstraints({advanced:[{focusMode:'continuous'}]}).catch(()=>{})}catch(e){}})
+  .catch(e=>{scanner=null;$('#res').innerHTML=err({message:'Camera not available: '+e})})}}
 
 sb.auth.onAuthStateChange(ev=>{if(ev==='SIGNED_OUT')showAuth()});
 const QS=new URLSearchParams(location.search);
